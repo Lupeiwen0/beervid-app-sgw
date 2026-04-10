@@ -9,6 +9,7 @@
 - [账号与授权](#账号与授权)
   - [获取账号列表](#get-open-apiv1accounts)
   - [TT 账号信息实时查询](#get-open-apiv1ttaccountsauthorizedaccountidinfo)
+  - [TTS 账号信息实时查询](#get-open-apiv1ttsaccountsauthorizedaccountidinfo)
   - [TT OAuth 授权链接](#post-open-apiv1ttauthlink)
   - [TTS OAuth 授权链接](#post-open-apiv1ttsauthlink)
 - [文件上传](#文件上传)
@@ -217,6 +218,51 @@
 | 404 | `ACCOUNT_NOT_FOUND` | 账号不存在 |
 | 400 | `PLATFORM_MISMATCH` | 账号不是 TT 平台 |
 | 401 | `TT_REAUTH_REQUIRED` | 授权已过期 |
+
+---
+
+### GET /open-api/v1/tts/accounts/:authorizedAccountId/info
+
+实时查询 TikTok Shop Creator 账号信息（从 TTS API 拉取最新资料并更新本地）。
+
+**Path Params**
+
+| 字段 | 说明 |
+|------|------|
+| `authorizedAccountId` | TTS 授权账号 ID |
+
+**Response `200`**
+
+```json
+{
+  "code": 0,
+  "data": {
+    "id": "uuid",
+    "openId": "string",
+    "platform": "tts",
+    "username": "string",
+    "displayName": null,
+    "avatarUrl": "string | null",
+    "authStatus": "active | expired | revoked | refresh_failed",
+    "grantedScopes": ["video.publish", "..."],
+    "lastAuthorizedAt": "ISO8601",
+    "updatedAt": "ISO8601",
+    "userType": "AFFILIATE_CREATOR",
+    "sellerType": "LOCAL",
+    "registerRegion": "US",
+    "selectionRegion": "US"
+  }
+}
+```
+
+**错误**
+
+| HTTP | Code | 说明 |
+|------|------|------|
+| 400 | `PLATFORM_MISMATCH` | 账号不是 TTS 平台 |
+| 404 | `ACCOUNT_NOT_FOUND` | 账号不存在 |
+| 409 | `ACCOUNT_PROFILE_MISMATCH` | 拉取到的账号与请求账号不匹配 |
+| 503 | `TTS_NOT_CONFIGURED` | TTS 集成未配置 |
 
 ---
 

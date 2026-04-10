@@ -2,10 +2,11 @@
 name: beervid-app-sgw
 description: >
   TikTok/TikTok Shop 应用服务集成指南。涵盖 OAuth 授权（TT + TTS 双平台）、Token 生命周期管理、
-  视频上传与发布、商品查询、视频数据分析、Webhook 回调的完整流程与最佳实践。
+  视频上传与发布、发布成功后的视频数据查询（TT 视频信息、TTS 带货表现）、队列定时刷新策略、
+  商品查询、Webhook 回调的完整流程与最佳实践。
   当用户需要：集成 TT/TTS OAuth 授权、处理账号绑定与 token 刷新、上传视频到 TT/TTS、创建发布任务、
-  查询视频数据或带货表现、接收 webhook 事件、设计相关数据库表结构、处理接口错误时，使用此 skill。
-  即使用户只提到 TikTok 授权、视频发布、账号管理、OSS 上传、webhook 投递中的任何一个环节，也应触发。
+  发布后查询视频数据或带货表现、设计队列定时刷新机制、接收 webhook 事件、设计相关数据库表结构、处理接口错误时，使用此 skill。
+  即使用户只提到 TikTok 授权、视频发布、账号管理、OSS 上传、webhook 投递、视频数据查询中的任何一个环节，也应触发。
 ---
 
 # TTS App Manager 集成 Skill
@@ -63,7 +64,18 @@ GET /open-api/v1/publish-tasks/:publishTaskId
 
 状态流转：`created → submitted → published / failed`
 
-> 完整端到端流程与最佳实践见 → [发布工作流](references/publish-workflow.md)
+### 5. 视频数据查询（发布成功后）
+
+发布成功后 `upstreamVideoId` 有值，可查询视频详情与数据表现：
+
+| 平台 | 接口 | 数据内容 |
+|------|------|---------|
+| TT | `GET /open-api/v1/tt/videos?authorizedAccountId=&videoIds=` | 视频基本信息（缩略图、分享链接等） |
+| TTS | `GET /open-api/v1/tts/videos/performances?authorizedAccountId=&videoIds=&startTimeGe=&endTimeLe=` | 带货表现（GMV、订单数、CTR 等，T-1 延迟） |
+
+**推荐使用队列定时刷新**数据，而非一次性查询。发布状态 30s 起步指数退避，TT 视频数据每 4-6 小时，TTS 表现数据每天 1 次。
+
+> 完整端到端流程、代码示例与队列刷新策略见 → [发布工作流](references/publish-workflow.md)
 
 ## 鉴权速查
 
