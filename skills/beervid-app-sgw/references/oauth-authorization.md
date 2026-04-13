@@ -20,7 +20,7 @@
 
 下游只需做三件事：
 
-1. **调用接口**，传入 `redirectUri`（可选）
+1. **调用接口**，传入 `redirectUri`
 2. **跳转用户浏览器**到返回的 `authorizeUrl`
 3. **接收回调**——用户授权后，系统 302 重定向到你的 `redirectUri`，URL 的 `state` 参数携带账号信息
 
@@ -58,7 +58,7 @@ Content-Type: application/json
 
 ```json
 {
-  "redirectUri": "https://your-app.com/oauth/callback"  // 可选
+  "redirectUri": "https://your-app.com/oauth/callback"
 }
 ```
 
@@ -155,10 +155,6 @@ const resp = await fetch('/open-api/v1/tt/auth/link', {
   platform: 'tt'               // 系统追加
 }
 ```
-
-### 不传 redirectUri
-
-不传 `redirectUri` 时，授权完成后重定向到 `/`，`state` 不携带账号信息。
 
 ### 业务 state 不是合法 JSON
 
@@ -266,20 +262,10 @@ const response = await fetch('/open-api/v1/tt/auth/link', {
   headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json' },
   body: JSON.stringify({ redirectUri })
 });
+const data = await response.json();
 
-const { authorizeUrl } = response.data.data;
+const { authorizeUrl } = data.data;
 window.location.href = authorizeUrl;
-```
-
-### ✅ 正确：不传 redirectUri（最简场景）
-
-```javascript
-const response = await fetch('/open-api/v1/tt/auth/link', {
-  method: 'POST',
-  headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json' },
-  body: JSON.stringify({})
-});
-// 授权完成后用户被重定向到 "/"，适用于不需要自动回调的场景
 ```
 
 ### ✅ 正确：解析回调 state

@@ -85,7 +85,7 @@
       "createdAt": "ISO8601",
       "updatedAt": "ISO8601"
     },
-    "apiKey": "sk-..."
+    "apiKey": "ttm_..."
   }
 }
 ```
@@ -111,7 +111,7 @@
   "webhookUrl": "https://your-app.com/webhooks",
   "webhookSecret": "your-secret",
   "enabled": true,
-  "subscribedEvents": ["publish.published", "publish.failed"]
+  "subscribedEvents": ["video.status.changed"]
 }
 ```
 
@@ -179,6 +179,8 @@
 | `revoked` | 用户撤销 | 重新授权 |
 | `refresh_failed` | token 刷新失败 | 重试或重新授权 |
 
+> **注意**：此接口不返回 `platform` 字段。请从 OAuth 回调的 `state` 中获取并持久化 `platform`，不要依赖此接口区分 TT/TTS 账号。
+
 ---
 
 ### GET /open-api/v1/tt/accounts/:authorizedAccountId/info
@@ -218,6 +220,7 @@
 | 404 | `ACCOUNT_NOT_FOUND` | 账号不存在 |
 | 400 | `PLATFORM_MISMATCH` | 账号不是 TT 平台 |
 | 401 | `TT_REAUTH_REQUIRED` | 授权已过期 |
+| 409 | `ACCOUNT_PROFILE_MISMATCH` | 拉取到的账号与请求账号不匹配 |
 
 ---
 

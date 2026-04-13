@@ -51,6 +51,7 @@ const tokenResp = await fetch('/open-api/v1/upload-token/generate', {
   method: 'POST',
   headers: { 'X-Api-Key': apiKey }
 });
+const tokenData = await tokenResp.json();
 
 // 2. 上传视频文件
 const formData = new FormData();
@@ -58,12 +59,13 @@ formData.append('file', videoFile);
 
 const uploadResp = await fetch('/open-api/v1/upload/tt-video', {
   method: 'POST',
-  headers: { 'X-Upload-Token': tokenResp.data.data.uploadToken },
+  headers: { 'X-Upload-Token': tokenData.data.uploadToken },
   body: formData
 });
+const uploadData = await uploadResp.json();
 
 // 返回 ossUrl，后续发布接口使用
-const { ossUrl, fileSize, contentType } = uploadResp.data.data;
+const { ossUrl, fileSize, contentType } = uploadData.data;
 ```
 
 ### Step 2：创建发布任务
@@ -82,19 +84,21 @@ const publishResp = await fetch('/open-api/v1/tt/videos/publish', {
     caption: '视频标题 #标签'
   })
 });
+const publishData = await publishResp.json();
 
 // 返回 202，异步执行
-const { id: publishTaskId, status } = publishResp.data.data;
+const { id: publishTaskId, status } = publishData.data;
 ```
 
 ### Step 3：查询发布状态
 
 ```javascript
-const task = await fetch(`/open-api/v1/publish-tasks/${publishTaskId}`, {
+const taskResp = await fetch(`/open-api/v1/publish-tasks/${publishTaskId}`, {
   headers: { 'X-Api-Key': apiKey }
 });
+const task = await taskResp.json();
 
-// task.data.data.status: 'created' | 'submitted' | 'published' | 'failed'
+// task.data.status: 'created' | 'submitted' | 'published' | 'failed'
 ```
 
 ### Step 4：查询视频数据（发布成功后）
@@ -102,13 +106,14 @@ const task = await fetch(`/open-api/v1/publish-tasks/${publishTaskId}`, {
 当 `status === 'published'` 时，使用返回的 `upstreamVideoId` 查询视频详情：
 
 ```javascript
-if (task.data.data.status === 'published' && task.data.data.upstreamVideoId) {
-  const videoData = await fetch(
+if (task.data.status === 'published' && task.data.upstreamVideoId) {
+  const videoResp = await fetch(
     `/open-api/v1/tt/videos?authorizedAccountId=${ttAccountId}` +
-    `&videoIds=${task.data.data.upstreamVideoId}`,
+    `&videoIds=${task.data.upstreamVideoId}`,
     { headers: { 'X-Api-Key': apiKey } }
   );
-  // videoData 包含 thumbnail_url, share_url 等
+  const videoData = await videoResp.json();
+  // videoData.data.items[0] 包含 thumbnail_url, share_url 等
 }
 ```
 
@@ -124,6 +129,7 @@ const tokenResp = await fetch('/open-api/v1/upload-token/generate', {
   method: 'POST',
   headers: { 'X-Api-Key': apiKey }
 });
+const tokenData = await tokenResp.json();
 
 // 2. 上传视频文件（需携带 authorizedAccountId）
 const formData = new FormData();
@@ -132,12 +138,13 @@ formData.append('authorizedAccountId', ttsAccountId);  // TTS 授权账号 ID
 
 const uploadResp = await fetch('/open-api/v1/upload/tts-video', {
   method: 'POST',
-  headers: { 'X-Upload-Token': tokenResp.data.data.uploadToken },
+  headers: { 'X-Upload-Token': tokenData.data.uploadToken },
   body: formData
 });
+const uploadData = await uploadResp.json();
 
 // 返回 videoFileId，后续发布接口使用
-const { videoFileId } = uploadResp.data.data;
+const { videoFileId } = uploadData.data;
 ```
 
 ### Step 2：查询商品（可选）
@@ -176,8 +183,10 @@ const publishResp = await fetch('/open-api/v1/tts/videos/publish', {
     productTitle: '点击购买'             // 商品锚点文案，最多 30 字符
   })
 });
+const publishData = await publishResp.json();
+const { id: publishTaskId, status } = publishData.data;
 
-// TTS 发布通常直接到 published 状态
+// TTS 创建接口仍返回 202 + created，但通常很快进入终态
 ```
 
 ### Step 4：查询视频带货表现（发布成功后）
@@ -188,18 +197,20 @@ TTS 发布成功后，`upstreamVideoId` 可用于查询带货表现数据：
 const taskResp = await fetch(`/open-api/v1/publish-tasks/${publishTaskId}`, {
   headers: { 'X-Api-Key': apiKey }
 });
+const task = await taskResp.json();
 
-if (taskResp.data.data.status === 'published' && taskResp.data.data.upstreamVideoId) {
+if (task.data.status === 'published' && task.data.upstreamVideoId) {
   // T-1 延迟，查询昨天数据
   const yesterday = Math.floor(Date.now() / 1000) - 86400;
-  const performances = await fetch(
+  const perfResp = await fetch(
     `/open-api/v1/tts/videos/performances` +
     `?authorizedAccountId=${ttsAccountId}` +
-    `&videoIds=${taskResp.data.data.upstreamVideoId}` +
+    `&videoIds=${task.data.upstreamVideoId}` +
     `&startTimeGe=${yesterday}` +
     `&endTimeLe=${yesterday}`,
     { headers: { 'X-Api-Key': apiKey } }
   );
+  const perfData = await perfResp.json();
 }
 ```
 
@@ -226,10 +237,11 @@ async function waitForPublishComplete(publishTaskId, options = {}) {
     const resp = await fetch(`/open-api/v1/publish-tasks/${publishTaskId}`, {
       headers: { 'X-Api-Key': apiKey }
     });
+    const data = await resp.json();
 
-    const { status, failureReason } = resp.data.data;
+    const { status, failureReason } = data.data;
 
-    if (status === 'published') return resp.data.data;
+    if (status === 'published') return data.data;
     if (status === 'failed') throw new Error(`Publish failed: ${failureReason}`);
 
     await new Promise(r => setTimeout(r, intervalMs));
@@ -255,12 +267,37 @@ await fetch(`/admin-api/v1/apps/${appId}/webhook`, {
     webhookUrl: 'https://your-app.com/webhooks/tt-manager',
     webhookSecret: 'your-signing-secret',
     enabled: true,
-    subscribedEvents: ['publish.created', 'publish.submitted', 'publish.published', 'publish.failed']
+    subscribedEvents: ['video.status.changed']
   })
 });
 ```
 
-Webhook 投递签名通过 `x-ttm-signature` header 传递。
+Webhook 投递签名通过 `x-ttm-signature` header 传递。验证方式：用你配置的 `webhookSecret` 对请求 body（原始 JSON 字符串）做 HMAC-SHA256，比对 `x-ttm-signature` 值。
+
+#### Webhook 请求体
+
+```json
+{
+  "event": "video.status.changed",
+  "platform": "tt",
+  "app_id": "uuid",
+  "authorized_account_id": "uuid",
+  "open_id": "string",
+  "publish_task_id": "uuid",
+  "upstream_publish_id": "string | null",
+  "upstream_video_id": "string | null",
+  "status": "success | failed | submitted",
+  "reason": "string",
+  "occurred_at": "ISO8601"
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `status` | `success`（发布成功）、`failed`（发布失败）、`submitted`（已提交到平台） |
+| `publish_task_id` | 对应创建发布接口返回的 `id`，用于关联你的发布任务记录 |
+| `upstream_video_id` | 仅 `status: success` 时有值，可用于查询视频数据 |
+| `reason` | 状态变更原因，失败时包含错误描述 |
 
 ## 发布成功后查询视频数据
 
@@ -271,12 +308,13 @@ Webhook 投递签名通过 `x-ttm-signature` header 传递。
 发布任务状态为 `published` 时，`upstreamVideoId` 字段有值：
 
 ```javascript
-const task = await fetch(`/open-api/v1/publish-tasks/${publishTaskId}`, {
+const taskResp = await fetch(`/open-api/v1/publish-tasks/${publishTaskId}`, {
   headers: { 'X-Api-Key': apiKey }
 });
+const task = await taskResp.json();
 
-if (task.data.data.status === 'published') {
-  const videoId = task.data.data.upstreamVideoId;
+if (task.data.status === 'published') {
+  const videoId = task.data.upstreamVideoId;
   // 用 videoId 查询视频数据
 }
 ```
@@ -286,12 +324,13 @@ if (task.data.data.status === 'published') {
 查询 TT 平台已发布视频的基本信息（缩略图、分享链接等）：
 
 ```javascript
-const videos = await fetch(
+const videosResp = await fetch(
   `/open-api/v1/tt/videos?authorizedAccountId=${ttAccountId}&videoIds=${upstreamVideoId}`,
   { headers: { 'X-Api-Key': apiKey } }
 );
+const videos = await videosResp.json();
 
-// videos.data.data.items[0] 包含：
+// videos.data.items[0] 包含：
 // - videoId: 视频ID
 // - raw.item_id: TikTok 视频 item ID
 // - raw.create_time: 创建时间戳
@@ -306,7 +345,7 @@ const videos = await fetch(
 查询 TTS Creator 视频的带货表现数据（GMV、订单数、CTR 等）：
 
 ```javascript
-const performances = await fetch(
+const perfResp = await fetch(
   `/open-api/v1/tts/videos/performances` +
   `?authorizedAccountId=${ttsAccountId}` +
   `&videoIds=${upstreamVideoId}` +
@@ -314,8 +353,9 @@ const performances = await fetch(
   `&endTimeLe=${endTimestamp}`,
   { headers: { 'X-Api-Key': apiKey } }
 );
+const performances = await perfResp.json();
 
-// performances.data.data.videos[0].performances[0].metrics 包含：
+// performances.data.videos[0].performances[0].metrics 包含：
 // - anchorDisplayRate: 商品锚点展示率
 // - clickThroughRate: 点击率
 // - orderCount: 订单数
@@ -335,7 +375,7 @@ const performances = await fetch(
 
 ### 发布状态同步
 
-TT 发布是异步的，状态会从 `submitted` 变为 `published` 或 `failed`。系统内置了 `publish-status-sync` 定时任务自动同步滞留的 `submitted` 状态任务，但客户端也应设计定期刷新机制：
+TT 发布是异步的，状态会从 `submitted` 变为 `published` 或 `failed`。系统会在后台自动同步状态，但客户端也应设计定期刷新机制：
 
 ```javascript
 // 推荐：使用队列定时刷新发布状态

@@ -41,7 +41,6 @@
 | `INVALID_UPLOAD_TOKEN` | Upload Token 格式错误或签名无效 | 重新生成 uploadToken |
 | `UPLOAD_TOKEN_EXPIRED` | Upload Token 超过 10 分钟有效期 | 重新生成 uploadToken |
 | `TT_REAUTH_REQUIRED` | TikTok refresh token 已过期 | 引导用户重新走 OAuth 授权流程 |
-| `TT_WEBHOOK_SIGNATURE_INVALID` | TikTok webhook 签名缺失或无效 | 系统内部处理，客户端无需关注 |
 
 ### 参数错误（400）
 
@@ -54,8 +53,6 @@
 | `MISSING_IDEMPOTENCY_KEY` | 发布接口缺少 Idempotency-Key header | 添加 `Idempotency-Key` header |
 | `PLATFORM_MISMATCH` | 账号平台与请求平台不一致 | 检查 authorizedAccountId 对应的平台 |
 | `INVALID_ACCOUNT` | 账号不属于当前应用或平台不匹配 | 确认 accountId 和 appId 归属 |
-| `INVALID_TT_WEBHOOK_PAYLOAD` | TikTok webhook payload 非法 | 系统内部处理 |
-| `TT_WEBHOOK_CLIENT_KEY_INVALID` | TikTok webhook client_key 非法 | 系统内部处理 |
 
 ### 资源不存在（404）
 
@@ -79,7 +76,6 @@
 | `TTS_NOT_CONFIGURED` | TTS 集成未配置（服务端配置问题） | 联系管理员 |
 | `TTS_AUTH_UNAVAILABLE` | TTS 认证服务不可用 | 稍后重试 |
 | `TOKEN_REFRESH_IN_PROGRESS` | 同一账号的 token 正在刷新中 | 等待后重试 |
-| `TOKEN_REFRESH_UNAVAILABLE` | 当前平台未配置 refresh 能力 | 联系管理员 |
 
 ### 服务端错误（500）
 
@@ -87,21 +83,14 @@
 |------|---------|---------|
 | `INTERNAL_SERVER_ERROR` | 未捕获的服务端错误 | 带 `x-request-id` 联系管理员 |
 
-### 回调内部错误
-
-| Code | HTTP | 触发场景 |
-|------|------|---------|
-| `TOKEN_EXCHANGE_FAILED` | 503 | TikTok/TTS token 兑换失败 |
-
 ## 重试策略
 
 ### 可重试的错误
 
 | 错误码 | 重试策略 |
 |--------|---------|
-| `TOKEN_REFRESH_IN_PROGRESS` | 固定间隔 2-3 秒，最多 3 次 |
+| `TOKEN_REFRESH_IN_PROGRESS` | 等待 2-3 秒后重试，最多 3 次 |
 | `TTS_AUTH_UNAVAILABLE` | 指数退避，初始 1 秒，最多 5 次 |
-| `TOKEN_EXCHANGE_FAILED` | 指数退避，初始 2 秒，最多 3 次 |
 | `INTERNAL_SERVER_ERROR` | 指数退避，初始 1 秒，最多 3 次 |
 | 5xx 错误（网络/超时） | 指数退避，初始 1 秒，最多 5 次 |
 
@@ -168,12 +157,7 @@ const ttsAccount = accounts.find(a => /* TTS 账号 */);
 
 ### TT_REAUTH_REQUIRED
 
-**根因**：TikTok refresh token 已过期，无法自动续期
-
-```
-正常流程：access token 过期 → 用 refresh token 自动刷新 → 继续
-异常流程：refresh token 也过期 → 无法刷新 → TT_REAUTH_REQUIRED
-```
+**根因**：TikTok 授权已过期，系统无法自动续期
 
 处理方式：
 1. 提示用户授权已过期
@@ -182,7 +166,7 @@ const ttsAccount = accounts.find(a => /* TTS 账号 */);
 
 ### TOKEN_REFRESH_IN_PROGRESS
 
-**根因**：并发请求触发同一账号的 token 刷新，Redis 锁冲突
+**根因**：同一账号的凭证正在刷新中，短暂等待即可
 
 处理方式：等待 2-3 秒后重试，通常一次重试即可。
 
@@ -193,20 +177,17 @@ const ttsAccount = accounts.find(a => /* TTS 账号 */);
 ```json
 {
   "code": "VALIDATION_ERROR",
-  "message": "Validation failed",
-  "details": [
-    { "field": "caption", "message": "String must contain at least 1 character(s)" }
-  ]
+  "message": "Validation failed"
 }
 ```
 
-检查 `message` 中的具体字段和规则。
+检查 `message` 中的具体校验规则。
 
 ### UPLOAD_TOKEN_EXPIRED
 
 **根因**：Upload Token 超过 10 分钟有效期
 
-Upload Token 结构为 `Base64(appId:expiration:HMAC-SHA256)`，生成后应立即使用。
+Upload Token 生成后有效期 10 分钟，生成后应立即使用。
 
 ## 错误处理最佳实践
 

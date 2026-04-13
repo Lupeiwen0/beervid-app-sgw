@@ -1,386 +1,179 @@
-# 数据库设计
+# 数据存储建议
 
 ## 目录
 
+- [设计目标](#设计目标)
+- [核心实体关系](#核心实体关系)
+- [推荐表结构](#推荐表结构)
 - [设计原则](#设计原则)
-- [ER 关系图](#er-关系图)
-- [核心表结构](#核心表结构)
-- [索引策略](#索引策略)
-- [扩展建议](#扩展建议)
 
-## 设计原则
+## 设计目标
 
-系统遵循以下数据库设计原则：
+本文档描述 **接入方** 在自己的系统中需要存储哪些数据。你不需要复制 tt-manager 的内部表结构——只需要存储从 API 响应中拿到的关键信息，以便后续调用其他接口。
 
-1. **无外键约束**：所有关系一致性由应用层维护，不使用数据库外键、触发器、存储过程、函数
-2. **唯一索引保证幂等**：通过 `uniqueIndex` 防止重复数据（如 `idempotency_key`、`event_key`）
-3. **组合索引优化查询**：多列查询优先组合索引，关注列顺序（区分度高的列在前）
-4. **枚举类型约束**：使用 `pgEnum` 限制状态、平台等字段取值
-5. **审计字段标准化**：所有表包含 `createdAt` + `updatedAt`（自动 `$onUpdate`）
-
-## ER 关系图
+核心思路：**按 API 流程逐步积累数据**。
 
 ```
-┌─────────────────┐       ┌──────────────────────┐
-│     apps        │       │    app_webhooks       │
-├─────────────────┤       ├──────────────────────┤
-│ id (PK)         │──1:*──│ appId                │
-│ name            │       │ webhookUrl           │
-│ apiKeyHash (UQ) │       │ webhookSecret        │
-│ status          │       │ enabled              │
-│ description     │       │ subscribedEvents     │
-│ createdAt       │       │ timeoutMs            │
-│ updatedAt       │       └──────────────────────┘
-└────────┬────────┘
-         │
-         │ 1:*
-         v
-┌──────────────────────┐       ┌──────────────────────┐
-│ app_account_bindings │       │ authorized_accounts  │
-├──────────────────────┤       ├──────────────────────┤
-│ id (PK)              │──:*:1─│ id (PK)              │
-│ appId                │       │ platform (enum)      │
-│ authorizedAccountId  │       │ openId               │
-│ bindingStatus        │       │ username             │
-│ boundAt              │       │ displayName          │
-└──────────────────────┘       │ avatarUrl           │
-                               │ sellerName (TTS)     │
-                               │ userType (TTS)       │
-                               │ sellerType (TTS)     │
-                               │ registerRegion (TTS) │
-                               │ selectionRegion (TTS)│
-                               │ authStatus (enum)    │
-                               │ grantedScopes (jsonb)│
-                               └──────────┬───────────┘
-                                          │
-                                          │ 1:1
-                                          v
-                               ┌──────────────────────┐
-                               │   account_tokens     │
-                               ├──────────────────────┤
-                               │ id (PK)              │
-                               │ authorizedAccountId  │
-                               │ platform             │
-                               │ accessTokenEnc       │
-                               │ refreshTokenEnc      │
-                               │ accessTokenExpiresAt │
-                               │ refreshTokenExpiresAt│
-                               │ tokenVersion         │
-                               │ lastRefreshError     │
-                               └──────────────────────┘
+OAuth 授权 → 拿到 authorizedAccountId → 存 authorized_accounts
+上传视频   → 拿到 ossUrl / videoFileId → 存入发布参数
+创建发布   → 拿到 publishTaskId        → 存 publish_tasks
+轮询/Webhook → 状态变更               → 更新 publish_tasks
+发布成功   → 拿到 upstreamVideoId      → 可查询视频数据
+```
 
-┌──────────────────────┐       ┌──────────────────────────┐
-│   publish_tasks      │       │  publish_status_events    │
-├──────────────────────┤       ├──────────────────────────┤
-│ id (PK)              │──1:*──│ id (PK)                  │
-│ appId                │       │ publishTaskId            │
-│ authorizedAccountId  │       │ platform                 │
-│ ossUrl               │       │ eventType                │
-│ platform             │       │ eventKey (UQ)            │
-│ caption              │       │ status                   │
-│ publishMode          │       │ rawPayload (jsonb)       │
-│ productId            │       │ occurredAt               │
-│ videoFileId          │       └──────────────────────────┘
-│ productTitle         │
-│ idempotencyKey (UQ)  │       ┌──────────────────────────┐
-│ upstreamPublishId(UQ)│       │  webhook_deliveries      │
-│ upstreamVideoId      │       ├──────────────────────────┤
-│ status (enum)        │──1:*──│ id (PK)                  │
-│ failureCode          │       │ appId                    │
-│ failureReason        │       │ publishTaskId            │
-│ rawRequest (jsonb)   │       │ eventId                  │
-│ rawResponse (jsonb)  │       │ targetUrl                │
-│ publishedAt          │       │ requestBody (jsonb)      │
-└──────────────────────┘       │ responseStatus          │
-                               │ responseBody            │
-┌──────────────────────┐       │ attemptCount            │
-│    media_assets      │       │ deliveryStatus          │
-├──────────────────────┤       │ nextRetryAt             │
-│ id (PK)              │       │ lastAttemptAt           │
-│ appId                │       └──────────────────────────┘
-│ authorizedAccountId  │
-│ sourceType           │
-│ ossBucket            │
-│ ossKey               │
-│ fileSize             │
+## 核心实体关系
+
+```
+┌──────────────────────┐
+│  authorized_accounts │  ← OAuth 回调时写入
+├──────────────────────┤
+│ id (authorizedAccountId)
 │ platform             │
+│ openId               │
+│ username             │
+│ authStatus           │
+│ ...                  │
+└──────────┬───────────┘
+           │
+           │ 1:*
+           v
+┌──────────────────────┐
+│   publish_tasks      │  ← 创建发布任务时写入
+├──────────────────────┤
+│ publishTaskId        │
+│ authorizedAccountId  │
+│ idempotencyKey       │
+│ platform             │
+│ status               │
+│ upstreamVideoId      │  ← 发布成功后回填
+│ ...                  │
 └──────────────────────┘
 ```
 
-## 核心表结构
+## 推荐表结构
 
-### apps — 应用
-
-```typescript
-// 枚举
-appStatusEnum: 'active' | 'disabled'
-
-apps {
-  id: uuid PK
-  name: varchar(128) NOT NULL
-  apiKeyHash: varchar(128) NOT NULL UNIQUE  // SHA256 hash，原文仅创建时返回
-  status: appStatusEnum NOT NULL
-  description: text
-  createdAt: timestamp NOT NULL
-  updatedAt: timestamp NOT NULL
-}
-```
-
-### app_webhooks — Webhook 配置
-
-```typescript
-appWebhooks {
-  id: uuid PK
-  appId: uuid NOT NULL
-  webhookUrl: text NOT NULL
-  webhookSecret: varchar(255) NOT NULL      // 用于签名下游投递
-  enabled: boolean NOT NULL
-  subscribedEvents: text[] NOT NULL         // 订阅的事件类型列表
-  timeoutMs: integer NOT NULL               // 下游超时时间
-  createdAt: timestamp NOT NULL
-  updatedAt: timestamp NOT NULL
-}
-// 索引: (appId, enabled, webhookUrl)
-```
+以下是接入方建议的表结构，可根据自身业务需求增减字段。
 
 ### authorized_accounts — 授权账号
 
-```typescript
-// 枚举
-platformEnum: 'tt' | 'tts'
-authStatusEnum: 'active' | 'expired' | 'revoked' | 'refresh_failed'
+来源：OAuth 回调的 `state` 参数 + `GET /open-api/v1/accounts` 接口。
 
+```typescript
 authorizedAccounts {
-  id: uuid PK
-  platform: platformEnum NOT NULL
-  externalAccountId: varchar(128)           // TTS 的 creatorUserOpenId
-  openId: varchar(128) NOT NULL             // 平台 OpenID
+  // 来自 OAuth 回调 state
+  id: uuid NOT NULL             // authorizedAccountId，后续所有接口都需要
+  platform: enum('tt', 'tts') NOT NULL
+  openId: varchar(128) NOT NULL
   username: varchar(128) NOT NULL
+
+  // 来自 GET /accounts 或账号信息接口（可选）
   displayName: varchar(128)
   avatarUrl: text
-  // TTS 专属字段
-  sellerName: varchar(128)
-  userType: varchar(64)
-  sellerType: varchar(64)
-  registerRegion: varchar(32)
-  selectionRegion: varchar(32)
-  // 状态
-  authStatus: authStatusEnum NOT NULL
-  grantedScopes: jsonb NOT NULL             // string[]
-  lastAuthorizedAt: timestamp NOT NULL
-  lastRefreshedAt: timestamp NOT NULL
+  authStatus: enum('active', 'expired', 'revoked', 'refresh_failed') NOT NULL
+  grantedScopes: json           // string[]
+
+  // 你的业务字段
+  // userId: uuid               // 关联你系统中的用户
+
   createdAt: timestamp NOT NULL
   updatedAt: timestamp NOT NULL
 }
-// 唯一索引: (platform, openId) — 同平台同用户只保留一条记录
+// 唯一约束: (platform, openId) — 同平台同用户只记录一次
+// 索引: (authStatus) — 查询需要重新授权的账号
 ```
 
-### account_tokens — 账号 Token
+**何时写入**：
+1. OAuth 回调到达时，解析 `state` 获取 `id`、`openId`、`username`、`platform`
+2. 可通过 `GET /open-api/v1/accounts` 定期同步 `authStatus`
 
-```typescript
-accountTokens {
-  id: uuid PK
-  authorizedAccountId: uuid NOT NULL
-  platform: platformEnum NOT NULL
-  accessTokenEnc: text NOT NULL             // AES 加密
-  refreshTokenEnc: text NOT NULL            // AES 加密
-  accessTokenExpiresAt: timestamp NOT NULL
-  refreshTokenExpiresAt: timestamp NOT NULL
-  tokenVersion: integer NOT NULL            // 乐观锁，刷新时自增
-  lastRefreshError: text
-  createdAt: timestamp NOT NULL
-  updatedAt: timestamp NOT NULL
-}
-// 唯一索引: (authorizedAccountId) — 一个账号只有一条 token 记录
-```
-
-### app_account_bindings — 应用-账号绑定
-
-```typescript
-appAccountBindings {
-  id: uuid PK
-  appId: uuid NOT NULL
-  authorizedAccountId: uuid NOT NULL
-  bindingStatus: varchar(32) NOT NULL
-  boundAt: timestamp NOT NULL
-  createdAt: timestamp NOT NULL
-  updatedAt: timestamp NOT NULL
-}
-// 唯一索引: (appId, authorizedAccountId) — 一个应用与一个账号只绑定一次
-// 索引: (appId, bindingStatus, authorizedAccountId) — 按应用查询活跃绑定
-```
+**注意**：同一用户可能同时有 TT 和 TTS 两个账号（不同的 `authorizedAccountId`），可通过 `username` 关联。
 
 ### publish_tasks — 发布任务
 
-```typescript
-// 枚举
-publishModeEnum: 'tt_direct' | 'tts_direct' | 'tts_product'
-publishTaskStatusEnum: 'created' | 'submitted' | 'published' | 'failed'
+来源：`POST /open-api/v1/{tt|tts}/videos/publish` 响应 + 轮询/Webhook 状态更新。
 
+```typescript
 publishTasks {
-  id: uuid PK
-  appId: uuid NOT NULL
+  // 创建发布时写入
+  publishTaskId: uuid NOT NULL    // 创建接口返回的 id
+  appId: uuid NOT NULL            // 你的应用 ID，区分多应用场景
   authorizedAccountId: uuid NOT NULL
-  ossUrl: text                              // TT: 有值; TTS: null
-  platform: platformEnum NOT NULL
+  platform: enum('tt', 'tts') NOT NULL
+  idempotencyKey: varchar(255) NOT NULL  // 你生成的幂等键，必须持久化
   caption: text NOT NULL
-  publishMode: publishModeEnum NOT NULL
+
+  // TT 专属
+  ossUrl: text                    // TT: 上传接口返回值; TTS: null
+
   // TTS 专属
+  videoFileId: text               // TTS: 上传接口返回值; TT: null
   productId: varchar(128)
-  videoFileId: text
   productTitle: varchar(128)
-  // 幂等与上游
-  idempotencyKey: varchar(255) NOT NULL
-  upstreamPublishId: varchar(128)
-  upstreamVideoId: varchar(128)
-  // 状态
-  status: publishTaskStatusEnum NOT NULL
+
+  // 状态跟踪（轮询或 Webhook 更新）
+  status: enum('created', 'submitted', 'published', 'failed') NOT NULL
   failureCode: varchar(128)
   failureReason: text
-  // 原始数据
-  rawRequest: jsonb
-  rawResponse: jsonb
+  upstreamVideoId: varchar(128)   // published 后有值，用于查询视频数据
   publishedAt: timestamp
+
+  // 你的业务字段
+  // userId: uuid
+  // videoFilePath: text          // 原始视频文件路径等
+
   createdAt: timestamp NOT NULL
   updatedAt: timestamp NOT NULL
 }
-// 唯一索引: (appId, idempotencyKey) — 应用级幂等
-// 唯一索引: (upstreamPublishId) — 上游发布 ID 去重
+// 唯一约束: (appId, idempotencyKey) — 防止重复创建（服务端按 appId + key 查重）
+// 索引: (authorizedAccountId, status) — 按账号查发布任务
+// 索引: (status, updatedAt) — 查询需要刷新状态的任务
 ```
 
-### publish_status_events — 状态事件日志
+**何时写入**：
+1. 调用发布接口后，将返回的 `id`（即 publishTaskId）、`status` 等存入
+2. 轮询 `GET /open-api/v1/publish-tasks/:id` 或收到 Webhook 后更新 `status`、`upstreamVideoId` 等
+
+**关于 idempotencyKey**：这个字段非常重要。生成后必须持久化，网络超时时用同一个 key 重试，避免创建重复任务。
+
+### video_data — 视频数据缓存（可选）
+
+来源：发布成功后通过视频数据查询接口获取。
 
 ```typescript
-publishStatusEvents {
-  id: uuid PK
-  publishTaskId: uuid NOT NULL
-  platform: platformEnum NOT NULL
-  eventType: varchar(64) NOT NULL           // task.created, task.published, task.failed, etc.
-  eventKey: varchar(255) NOT NULL           // 去重键
-  status: publishTaskStatusEnum NOT NULL
-  rawPayload: jsonb
-  occurredAt: timestamp NOT NULL
-  createdAt: timestamp NOT NULL
+// TT 视频信息（来自 GET /open-api/v1/tt/videos）
+ttVideos {
+  id: uuid NOT NULL               // publishTaskId 或业务主键
+  authorizedAccountId: uuid NOT NULL
+  videoId: varchar(128) NOT NULL   // upstreamVideoId
+  thumbnailUrl: text
+  shareUrl: text
+  raw: jsonb                      // 接口返回的完整数据
+  fetchedAt: timestamp NOT NULL   // 最后一次拉取时间
 }
-// 唯一索引: (eventKey) — 事件去重
-```
 
-### webhook_deliveries — Webhook 投递记录
-
-```typescript
-webhookDeliveries {
-  id: uuid PK
-  appId: uuid NOT NULL
-  publishTaskId: uuid NOT NULL
-  eventId: uuid NOT NULL
-  targetUrl: text NOT NULL
-  requestBody: jsonb NOT NULL
-  responseStatus: integer
-  responseBody: text
-  attemptCount: integer NOT NULL            // 当前重试次数
-  deliveryStatus: varchar(32) NOT NULL      // pending, delivered, failed
-  nextRetryAt: timestamp                    // 指数退避下次重试时间
-  lastAttemptAt: timestamp
-  createdAt: timestamp NOT NULL
-  updatedAt: timestamp NOT NULL
+// TTS 带货表现（来自 GET /open-api/v1/tts/videos/performances）
+ttsPerformances {
+  id: uuid NOT NULL
+  authorizedAccountId: uuid NOT NULL
+  videoId: varchar(128) NOT NULL   // upstreamVideoId
+  date: date NOT NULL              // 表现数据所属日期（T-1 延迟）
+  clickThroughRate: decimal
+  orderCount: integer
+  itemSoldCount: integer
+  gmvAmount: decimal
+  gmvCurrency: varchar(8)
+  raw: jsonb
+  fetchedAt: timestamp NOT NULL
 }
-// 唯一索引: (eventId, targetUrl) — 同一事件不重复投递到同一 URL
-// 索引: (deliveryStatus, nextRetryAt) — 查询待重试的投递
+// 唯一约束: (videoId, date) — 每天一条记录
 ```
 
-## 索引策略
+这些表不是必须的——如果业务只需要展示最新数据，可以直接从 API 实时查询。但如果需要历史趋势分析或减少 API 调用，建议缓存。
 
-### 已有索引总览
+## 设计原则
 
-| 表 | 索引类型 | 列 | 用途 |
-|---|---------|---|------|
-| apps | UNIQUE | apiKeyHash | API Key 快速查找 |
-| authorized_accounts | UNIQUE | (platform, openId) | 同平台同用户去重（upsert 依赖） |
-| account_tokens | UNIQUE | (authorizedAccountId) | 按 accountId 查 token |
-| app_account_bindings | UNIQUE | (appId, authorizedAccountId) | 绑定去重 |
-| app_account_bindings | INDEX | (appId, bindingStatus, authorizedAccountId) | 按应用查活跃绑定 |
-| app_webhooks | INDEX | (appId, enabled, webhookUrl) | 查询应用的活跃 webhook |
-| publish_tasks | UNIQUE | (appId, idempotencyKey) | 幂等去重 |
-| publish_tasks | UNIQUE | (upstreamPublishId) | 上游 ID 去重 |
-| publish_status_events | UNIQUE | (eventKey) | 事件去重（webhook 回调场景） |
-| webhook_deliveries | UNIQUE | (eventId, targetUrl) | 投递去重 |
-| webhook_deliveries | INDEX | (deliveryStatus, nextRetryAt) | 待重试投递查询 |
-
-### 索引设计原则
-
-1. **唯一索引 = 幂等保障**：`idempotencyKey`、`eventKey` 等通过唯一索引防止重复
-2. **组合索引关注列顺序**：区分度高的列在前（如 `appId` 在 `idempotencyKey` 前面）
-3. **覆盖常见查询路径**：
-   - `listByAppId(appId)` → 按 `appId` 过滤
-   - `listStaleTasks({ statuses, updatedBefore })` → 按 `status + updatedAt`
-   - `listExpiringAccessTokenRecords(expiresBefore)` → 按 `accessTokenExpiresAt`
-
-## 扩展建议
-
-### 1. 多应用隔离查询优化
-
-如果需要频繁查询某个应用的所有发布任务，可添加：
-
-```sql
-CREATE INDEX idx_publish_tasks_app_status ON publish_tasks (appId, status);
-```
-
-### 2. 账号 Token 刷新扫描优化
-
-定时刷新 Job 查询即将过期的 token：
-
-```sql
--- 已有的唯一索引 (authorizedAccountId) 可覆盖单账号查询
--- 批量扫描建议添加：
-CREATE INDEX idx_account_tokens_access_expires ON account_tokens (accessTokenExpiresAt)
-WHERE accessTokenExpiresAt > now();
-```
-
-### 3. 历史数据归档
-
-`publish_status_events` 和 `webhook_deliveries` 是高频写入表，建议：
-
-- 设置数据保留策略（如保留 90 天）
-- 定期归档到冷存储或分析库
-- 考虑分区表（按月/季度）
-
-### 4. 扩展新平台
-
-如果需要支持新平台（如 YouTube、Instagram），扩展 `platformEnum`：
-
-```sql
-ALTER TYPE platform ADD VALUE 'youtube' BEFORE 'tiktok';
-```
-
-`authorized_accounts` 表的 TTS 专属字段使用 nullable 设计，新平台可复用现有字段或新增 nullable 列。
-
-### 5. Webhook 投递监控
-
-建议添加投递统计视图：
-
-```sql
-CREATE VIEW webhook_delivery_stats AS
-SELECT
-  appId,
-  targetUrl,
-  COUNT(*) AS total_deliveries,
-  SUM(CASE WHEN deliveryStatus = 'delivered' THEN 1 ELSE 0 END) AS success_count,
-  SUM(CASE WHEN deliveryStatus = 'failed' THEN 1 ELSE 0 END) AS failed_count,
-  AVG(attemptCount) AS avg_attempts
-FROM webhook_deliveries
-GROUP BY appId, targetUrl;
-```
-
-### 6. Redis 数据结构补充
-
-OAuth state 使用 Redis 存储（非数据库表）：
-
-```
-Key: oauth:state:{stateUuid}
-Value: JSON { appId, redirectUri, platform }
-TTL: 600 seconds
-
-Key: tt:refresh_lock:{authorizedAccountId}
-Value: lockOwnerToken
-TTL: refreshLockTtlSeconds (configurable)
-```
+1. **只存 API 返回的数据**：不需要猜测 tt-manager 内部结构，按接口响应的字段存储即可
+2. **idempotencyKey 必须持久化**：发布接口的幂等键在重试时必须复用，否则会创建重复任务
+3. **authStatus 需要定期检查**：通过 `GET /accounts` 同步账号状态，`expired`/`revoked` 状态需引导用户重新授权
+4. **upstreamVideoId 是后续查询的关键**：发布成功后才有值，用它来查询 TT 视频数据或 TTS 带货表现
+5. **按你的业务补充字段**：上面的表结构是推荐的最小集，根据你的业务需要添加 `userId`、`tags`、`category` 等字段
